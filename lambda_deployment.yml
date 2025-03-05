@@ -1,0 +1,67 @@
+#lambda deployment
+
+#Create a Lambda function using Python 3.8 or higher runtime to run your script.
+#Add a trigger to the Lambda to ensure it runs on a set schedule daily. No one should be working past 7pm. (Note: to test you may need to modify the time accordingly so you aren't waiting for 7pm)
+
+#create IAM role manually: create role, attach AWSLambdaBasicExecutionRole & custom_iam_role_policy(create policy first), copy ARN, paste here
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create Lambda function
+Resources:
+  StopInstancesLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: StopInstancesFunction
+      Description: Automatically stops all running EC2 instances at 7PM
+      Runtime: python3.12
+      Role: arn:aws:iam::390488375643:role/LUIT-Python3-IAM-role #manually paste after manually creating. Reference top of this file 
+      Handler: index.lambda_handler #index.py is automatically created by cloudformation. Format here is file name (no extension) + function name
+      Code:
+        ZipFile: |
+          #stop ec2 instances
+
+          import boto3
+
+          def lambda_handler(event, context):
+
+              ec2 = boto3.client('ec2')
+
+              response = ec2.describe_instances(
+                  Filters=[
+                      {
+                          'Name': 'instance-state-name',
+                          'Values': [
+                              'running'
+                          ]
+                      }
+                  ]
+              )
+
+              instance_ids = []
+              for reservation in response['Reservations']:
+                  for instance in reservation['Instances']:
+                      instance_ids.append(instance['InstanceId'])
+
+              if instance_ids:
+                  ec2.stop_instances(InstanceIds=instance_ids)
+                  print(f"Stopping instances: {instance_ids}")
+              else:
+                  print("No running instances found")
+
+   # EventBridge (CloudWatch Events) Trigger to run the Lambda daily at 7 PM
+  StopInstancesSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "cron(0 19 * * ? *)" # 7 PM UTC
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StopInstancesLambdaFunction.Arn
+          Id: StopInstancesLambdaTrigger
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref StopInstancesLambdaFunction
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt StopInstancesSchedule.Arn
